@@ -10,24 +10,47 @@ Repository layout
 - `tests/` — integration tests using Jest + Supertest.
 - `Dockerfile`, `render.yaml`, `Procfile` — deployment artifacts for Render (Docker-based deployment).
 
-API
----
-POST /identify
+# Bitespeed — Identity Reconciliation (Submission)
 
-Request body (JSON):
+This repository contains my implementation for the Bitespeed Backend Task: Identity Reconciliation.
+The service exposes a single HTTP endpoint that consolidates customer contact information (email and/or phoneNumber)
+and maintains a linked set of `Contact` records so purchases made with different contact details can be attributed
+to the same customer.
+
+## What I implemented
+
+- POST `/identify` endpoint that accepts JSON `{ "email"?: string, "phoneNumber"?: string }`.
+- `Contact` table and Prisma schema with fields: `id`, `email`, `phoneNumber`, `linkedId`, `linkPrecedence`, `createdAt`, `updatedAt`, `deletedAt`.
+- Reconciliation rules per the task: link by email OR phone, oldest `createdAt` is primary, others secondary.
+- Merging logic where two primaries become one (oldest remains primary).
+- Ignore contacts with `deletedAt != null` during matching.
+- Transactional updates using Prisma to avoid partial state.
+- Integration tests covering the task examples and edge cases (deleted contacts, concurrency, transaction failure).
+- Deployment artifacts: `Dockerfile`, `render.yaml`, `Procfile` and a basic GitHub Actions CI workflow.
+
+## Repository structure
+
+- `src/` — TypeScript source (`app.ts`, `index.ts`, `routes/identify.ts`).
+- `prisma/` — Prisma schema and migrations.
+- `tests/` — Jest + Supertest integration tests.
+- `Dockerfile`, `render.yaml`, `Procfile` — deployment files.
+
+## API
+
+### POST /identify
+
+Request (JSON):
 
 ```json
 { "email": "string?", "phoneNumber": "string?" }
 ```
-
-Either `email` or `phoneNumber` will be present.
 
 Response (200):
 
 ```json
 {
   "contact": {
-    "primaryContactId": 1,
+    "primaryContactId": number,
     "emails": ["primary@example.com", "other@example.com"],
     "phoneNumbers": ["123456", "987654"],
     "secondaryContactIds": [2,3]
@@ -35,17 +58,13 @@ Response (200):
 }
 ```
 
-Behavior summary
-----------------
-- Contacts are linked when any email OR phone matches.
-- The oldest `Contact` by `createdAt` becomes the `primary` for a connected group; others become `secondary` (their `linkedId` set to the primary).
-- If incoming data contains new contact information, a new `secondary` contact row is created and linked to the primary.
-- Contacts with `deletedAt != null` are ignored for matching.
-- All reconciliation operations run inside a database transaction to avoid partial updates.
+Notes:
+- Emails are normalized to lower-case for matching.
+- Either `email` or `phoneNumber` will be present in requests.
 
-Local development (SQLite default)
----------------------------------
-Prereqs: Node 20+, npm
+## Local development
+
+Prerequisites: Node.js 20+, npm
 
 ```bash
 cd bitespeed-server
@@ -55,21 +74,25 @@ npx prisma migrate dev --name init
 npm run dev
 ```
 
-The server will listen on port `3333` by default. Example requests:
+The service starts on port `3333` by default. Example requests:
 
 ```bash
 curl -X POST http://localhost:3333/identify \
   -H 'Content-Type: application/json' \
   -d '{"email":"lorraine@hillvalley.edu","phoneNumber":"123456"}'
+```
 
+```bash
 curl -X POST http://localhost:3333/identify \
   -H 'Content-Type: application/json' \
   -d '{"email":"mcfly@hillvalley.edu","phoneNumber":"123456"}'
 ```
 
-Testing
--------
-Run the test suite (Jest + Supertest):
+## Tests
+
+Integration tests are provided and exercise the main examples and edge cases (deletedAt handling, concurrent requests, transaction failures).
+
+Run tests:
 
 ```bash
 cd bitespeed-server
@@ -79,59 +102,47 @@ npx prisma migrate dev --name init
 npm test
 ```
 
-Using Postgres (development and production)
-------------------------------------------
-To use Postgres instead of SQLite, set `DATABASE_URL` in `bitespeed-server/.env` (or in your environment) to a Postgres connection string, for example:
+## Using Postgres
+
+For production, use Postgres. Set `DATABASE_URL` in `bitespeed-server/.env` or as an environment variable, for example:
 
 ```
 DATABASE_URL="postgresql://user:password@localhost:5432/bitespeed?schema=public"
 ```
 
-Then run:
+Run migrations:
 
 ```bash
 npx prisma generate
 npx prisma migrate dev --name init
 ```
 
-When deploying to a production Postgres instance (Render, Railway, etc.) run migrations with:
+In production/deploy, use `npx prisma migrate deploy` to apply migrations.
 
-```bash
-npx prisma migrate deploy
-```
+## Deployment (Render)
 
-Render deployment (Docker)
---------------------------
-This repo includes a `Dockerfile` and `render.yaml` to simplify deploying to Render.
+I included a `Dockerfile` and a `render.yaml` so this service can be deployed to Render with a Postgres database.
 
-Steps:
+High-level steps:
+
 1. Push this repository to GitHub.
-2. On Render, create a new **Web Service** and connect your GitHub repository.
-3. Select **Docker** as the environment and confirm `Dockerfile` is used.
-4. Add a PostgreSQL database via Render or provide an external Postgres instance; set the `DATABASE_URL` environment variable in the Render service (Render can also inject db connection strings from the DB add-on).
-5. Deploy. The Docker container runs `npx prisma migrate deploy` at start and then `node dist/index.js`.
+2. In Render, create a new Web Service and connect your GitHub repo (or use `render.yaml`).
+3. Provision a PostgreSQL database in Render (or attach an external one) and ensure `DATABASE_URL` is set for the service.
+4. Deploy. The container executes `npx prisma migrate deploy` and starts the server.
 
-CI (GitHub Actions)
--------------------
-A basic CI workflow is included at `.github/workflows/ci.yml`. It runs `npm test` on push/PR to `main` or `master`.
+If you prefer, I can provide a step-by-step Render UI checklist and exact values to paste in.
 
-Notes & recommendations
------------------------
-- The current project uses SQLite by default for easy local testing; switch to Postgres for production.
-- For high concurrency/production environments, consider stronger DB-level locking, unique constraints, or deduplication strategies to avoid race conditions at extreme scale.
-- Add monitoring, structured logging, and environment-based configuration before production.
+## CI
 
-Files added for deployment
-- `Dockerfile` — container build
-- `render.yaml` — Render manifest (service + db)
-- `Procfile` — optional start command
-- `.github/workflows/ci.yml` — test CI
+A basic GitHub Actions workflow is included at `.github/workflows/ci.yml`. It runs tests on push/PR.
 
-If you want, I can:
-- Prepare a `docker-compose.yml` for local Postgres + migrations.
-- Create a sample Render deploy checklist and environment variable list.
-- Deploy the app to Render for you and provide the public `/identify` URL.
+## Notes and recommendations
 
----
+- The implementation focuses on correctness and clarity for the task requirements. For production readiness I recommend:
+  - Using Postgres as the persistent database.
+  - Adding structured logging and observability (metrics/alerts).
+  - Hardening input validation and rate limiting.
+  - Considering unique constraints or more explicit locking if your traffic pattern produces frequent concurrent link operations.
 
-Happy to proceed with any of the above — tell me which next step you prefer.
+
+
