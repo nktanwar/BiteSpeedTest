@@ -2,8 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install build deps
-RUN apk add --no-cache python3 make g++
+# Install build deps and runtime SSL certs (needed by Prisma)
+RUN apk add --no-cache python3 make g++ openssl ca-certificates \
+	&& update-ca-certificates || true
 
 # Copy package files first for caching
 COPY package.json package-lock.json ./
